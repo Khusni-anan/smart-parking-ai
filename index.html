@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <title>Monitoring CCTV & Setup ROI</title>
+    <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background-color: #f4f6f9; margin: 0; padding: 20px; text-align: center; }
+        .container { max-width: 1200px; margin: auto; background: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .top-bar { display: flex; gap: 10px; justify-content: center; margin-bottom: 20px; }
+        button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 5px; color: white; font-weight: bold; }
+        .btn-setup { background: #17a2b8; }
+        .btn-connect { background: #28a745; }
+        .btn-ticket { background: #ffc107; color: #222; }
+        .canvas-container { position: relative; width: 100%; max-width: 800px; margin: 10px auto; background: #000; aspect-ratio: 16/9; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; cursor: crosshair; }
+        #reference-img { width: 100%; height: 100%; object-fit: cover; opacity: 0.5; display: none; }
+        .main-layout { display: flex; gap: 20px; display: none; }
+        .cctv-grid { flex: 2; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .cctv-box { background: #1a1a24; border-radius: 8px; overflow: hidden; aspect-ratio: 16/9; display: flex; align-items: center; justify-content: center; }
+        .cctv-box img { width: 100%; display: none; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🎛️ Sistem Parkir Pintar</h1>
+    <div class="top-bar">
+        <button class="btn-setup" onclick="toggleSetup()">📐 SETUP</button>
+        <button class="btn-connect" onclick="startLive()">🔌 MONITOR</button>
+        <button class="btn-ticket" onclick="requestTiket()">🎫 TIKET</button>
+    </div>
+
+    <div id="setup-section" style="display: none;">
+        <div style="margin-bottom: 10px;">
+            <select id="kamera-select"><option value="1">Kamera A</option><option value="2">Kamera B</option></select>
+            <button onclick="loadFrame()">Ambil Frame</button>
+            <label><input type="radio" name="mode" value="calibration" checked onchange="mode='calibration'"> Kalibrasi (4 titik)</label>
+            <label><input type="radio" name="mode" value="roi" onchange="mode='roi'"> Gambar Slot</label>
+        </div>
+        <div class="canvas-container">
+            <img id="reference-img">
+            <canvas id="roi-canvas" width="1280" height="720"></canvas>
+        </div>
+        <button onclick="clearData()">🗑️ Hapus Semua</button>
+        <button class="btn-connect" onclick="saveToServer()">💾 Simpan ke Server</button>
+    </div>
+
+    <div class="main-layout" id="live-section">
+        <div class="cctv-grid">
+            <div class="cctv-box"><img id="cam1"></div>
+            <div class="cctv-box"><img id="cam2"></div>
+        </div>
+        <div id="tiketResult" style="flex: 1; border: 2px dashed #ccc; padding: 20px;"></div>
+    </div>
+</div>
+
+<script>
+    const baseUrl = "http://bore.pub:52985";
+    let mode = 'calibration', calibrationPoints = [], savedSlots = [], currentPoints = [];
+    const canvas = document.getElementById('roi-canvas'), ctx = canvas.getContext('2d');
+
+    // Load dari LocalStorage
+    window.onload = () => {
+        savedSlots = JSON.parse(localStorage.getItem('savedSlots') || '[]');
+        calibrationPoints = JSON.parse(localStorage.getItem('calibrationPoints') || '[]');
+        redraw();
+    };
+
+    function toggleSetup() { document.getElementById('setup-section').style.display = 'block'; document.getElementById('live-section').style.display = 'none'; }
+    function startLive() { 
+        document.getElementById('setup-section').style.display = 'none'; 
+        document.getElementById('live-section').style.display = 'flex';
+        document.getElementById('cam1').src = `${baseUrl}/video_feed/1`;
+        document.getElementById('cam2').src = `${baseUrl}/video_feed/2`;
+        document.getElementById('cam1').style.display = document.getElementById('cam2').style.display = "block";
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const x = Math.round((e.clientX - rect.left) * (1280/rect.width));
+        const y = Math.round((e.clientY - rect.top) * (720/rect.height));
+
+        if (mode === 'calibration' && calibrationPoints.length < 4) calibrationPoints.push([x, y]);
+        else if (mode === 'roi') {
+            currentPoints.push([x, y]);
+            if (currentPoints.length === 4) { savedSlots.push([...currentPoints]); currentPoints = []; }
+        }
+        redraw();
+    });
+
+    function redraw() {
+        ctx.clearRect(0, 0, 1280, 720);
+        calibrationPoints.forEach((p, i) => { ctx.fillStyle = 'blue'; ctx.fillRect(p[0]-10, p[1]-10, 20, 20); ctx.fillText('P'+(i+1), p[0]+15, p[1]); });
+        savedSlots.forEach(s => { ctx.strokeStyle = '#00FF00'; ctx.beginPath(); ctx.moveTo(s[0][0], s[0][1]); for(let i=1;i<4;i++) ctx.lineTo(s[i][0], s[i][1]); ctx.closePath(); ctx.stroke(); });
+    }
+
+    function clearData() { calibrationPoints = []; savedSlots = []; localStorage.clear(); redraw(); }
+
+    async function saveToServer() {
+        localStorage.setItem('savedSlots', JSON.stringify(savedSlots));
+        localStorage.setItem('calibrationPoints', JSON.stringify(calibrationPoints));
+        const payload = { camera_id: document.getElementById('kamera-select').value, rois: savedSlots, calibration_points: calibrationPoints };
+        await fetch(`${baseUrl}/update_roi`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+        alert("Data tersimpan!");
+    }
+
+    function loadFrame() { document.getElementById('reference-img').src = `${baseUrl}/get_frame/${document.getElementById('kamera-select').value}?t=${Date.now()}`; document.getElementById('reference-img').style.display = 'block'; }
+</script>
+</body>
+</html>
